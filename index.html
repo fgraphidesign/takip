@@ -14,6 +14,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root{
   --bg:#F4F6F8;
@@ -108,19 +109,21 @@ a{color:inherit;}
   background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--blue);
   border-radius:var(--radius);padding:14px 14px 12px;margin-bottom:10px;cursor:pointer;
 }
-.project-card.status-devam{border-left-color:var(--blue);}
+.project-card.status-devam{border-left-color:var(--amber);}
 .project-card.status-bitti{border-left-color:var(--green);}
 .project-card.status-iptal{border-left-color:var(--red);}
 .project-card .row1{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;}
 .project-card .title{font-family:'Fraunces',serif;font-weight:700;font-size:17px;}
 .badge{font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:20px;white-space:nowrap;letter-spacing:.02em;}
-.badge.devam{background:#E7F0F7;color:var(--blue);}
+.badge.devam{background:#FCEAD2;color:#8A5A12;}
 .badge.bitti{background:#E6F5EE;color:var(--green);}
 .badge.iptal{background:#FBEAEA;color:var(--red);}
 .project-card .dept{font-size:12px;color:var(--ink-soft);margin-top:2px;}
 .progress-bar{height:5px;background:var(--line);border-radius:3px;margin-top:10px;overflow:hidden;}
 .progress-bar > div{height:100%;background:var(--amber);}
 .project-card .meta-row{display:flex;justify-content:space-between;font-size:11.5px;color:var(--ink-soft);margin-top:6px;font-weight:600;}
+
+.overdue-banner{background:#FBEAEA;color:var(--red);border:1px solid #F3C6C6;border-radius:var(--radius);padding:11px 14px;font-size:13px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px;}
 
 .empty{
   text-align:center;color:var(--ink-soft);padding:40px 20px;font-size:14px;
@@ -149,6 +152,9 @@ a{color:inherit;}
 .task-card .foot{display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:11.5px;color:var(--ink-soft);font-weight:600;}
 .task-card .deadline.overdue{color:var(--red);font-weight:800;}
 .tag-chip{display:inline-block;background:var(--line);color:var(--ink-soft);font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:20px;margin-right:4px;}
+.tag-chip.filterable{cursor:pointer;margin-bottom:6px;}
+.tag-chip.filterable.active{background:var(--navy);color:#fff;}
+.filter-row{margin:12px 0 4px;}
 
 /* ---------- Kanban ---------- */
 .kanban-cols{display:flex;gap:10px;overflow-x:auto;margin:0 -16px;padding:0 16px 8px;}
@@ -297,6 +303,7 @@ let state = {
   currentUserId: localStorage.getItem('pt_user_id') || null,
   taskExtra: {progress:[], comments:[]}, // for open task
   filter: '',
+  projectFilter: {pid:null, scope:'all', tag:''},
   calMonth: (function(){const d=new Date(); return {y:d.getFullYear(), m:d.getMonth()};})()
 };
 let unsubs = {task:null};
@@ -538,7 +545,7 @@ function renderHome(){
     totalActiveTasks += (s.total - s.done);
     totalOverdue += s.overdue;
   });
-  const activeProjects = state.projects.filter(p=>p.status==='devam').length;
+  const totalProjects = state.projects.length;
 
   const cards = projects.map(p=>{
     const s = projectStats(p.id);
@@ -559,21 +566,24 @@ function renderHome(){
 
   const html = `
     <div class="section-title">Genel Durum</div>
+    ${totalOverdue>0 ? `<div class="overdue-banner">⚠ ${totalOverdue} iş gecikti — ilgili projelere göz at.</div>` : ''}
     <div class="stats-row">
-      <div class="stat"><div class="num">${activeProjects}</div><div class="lbl">Aktif proje</div></div>
-      <div class="stat"><div class="num">${totalActiveTasks}</div><div class="lbl">Açık iş</div></div>
-      <div class="stat ${totalOverdue>0?'warn':''}"><div class="num">${totalOverdue}</div><div class="lbl">Gecikmiş</div></div>
+      <div class="stat"><div class="num">${totalProjects}</div><div class="lbl">Toplam proje</div></div>
+      <div class="stat"><div class="num">${totalActiveTasks}</div><div class="lbl">Aktif iş</div></div>
+      <div class="stat ${totalOverdue>0?'warn':''}"><div class="num">${totalOverdue}</div><div class="lbl">Geciken iş</div></div>
     </div>
     <div class="search-row">
       <input id="searchInput" placeholder="Proje, iş, kişi veya etiket ara…" value="${escapeHtml(state.filter)}">
       <button class="fab" id="newProjectBtn">+</button>
     </div>
+    <button class="btn ghost" id="excelExportBtn" style="margin-bottom:16px">📊 Tüm Projeler İçin Excel Raporu</button>
     ${cards || `<div class="empty"><b>Henüz proje yok</b>Yeni bir proje açmak için + butonuna dokun.</div>`}
   `;
   app.innerHTML = renderChrome(html, 'home');
   wireChrome();
   document.getElementById('searchInput').addEventListener('input', e=>{ state.filter = e.target.value; render(); });
   document.getElementById('newProjectBtn').addEventListener('click', openNewProjectSheet);
+  document.getElementById('excelExportBtn').addEventListener('click', exportAllProjectsExcel);
   app.querySelectorAll('[data-open-project]').forEach(el=>{
     el.addEventListener('click', ()=> go({name:'project', pid: el.dataset.openProject, tab:'liste'}));
   });
@@ -613,7 +623,22 @@ function openNewProjectSheet(){
 function renderProject(pid, tab){
   const p = state.projects.find(x=>x.id===pid);
   if(!p){ go({name:'home'}); return; }
-  const tasks = state.tasksByProject[pid] || [];
+  const allTasks = state.tasksByProject[pid] || [];
+
+  if(state.projectFilter.pid !== pid){
+    state.projectFilter = {pid, scope:'all', tag:''};
+  }
+  const pf = state.projectFilter;
+  const me = currentUser();
+  const allTags = Array.from(new Set(allTasks.flatMap(t=>t.tags||[])));
+  const tasks = allTasks.filter(t=>{
+    if(pf.scope==='mine' && (!me || t.assignedTo!==me.name)) return false;
+    if(pf.scope==='given' && (!me || t.givenBy!==me.name)) return false;
+    if(pf.tag && !(t.tags||[]).includes(pf.tag)) return false;
+    return true;
+  });
+
+  const s = projectStats(pid);
 
   const tabsHtml = `
     <div class="tabs">
@@ -621,6 +646,17 @@ function renderProject(pid, tab){
       <button data-tab="kanban" class="${tab==='kanban'?'active':''}">Kanban</button>
       <button data-tab="pdf" class="${tab==='pdf'?'active':''}" id="pdfTabBtn">PDF</button>
     </div>`;
+
+  const filterHtml = `
+    <div class="filter-row pill-toggle">
+      <button data-scope="all" class="${pf.scope==='all'?'active':''}">Tümü</button>
+      <button data-scope="mine" class="${pf.scope==='mine'?'active':''}">Bana Atanan</button>
+      <button data-scope="given" class="${pf.scope==='given'?'active':''}">Verdiklerim</button>
+    </div>
+    ${allTags.length ? `<div class="filter-row">
+      <span class="tag-chip filterable ${!pf.tag?'active':''}" data-tagf="">Tümü Etiket</span>
+      ${allTags.map(tag=>`<span class="tag-chip filterable ${pf.tag===tag?'active':''}" data-tagf="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`).join('')}
+    </div>` : ''}`;
 
   let body = '';
   if(tab==='kanban'){
@@ -661,7 +697,13 @@ function renderProject(pid, tab){
       </select>
     </div>
     ${p.department ? `<div class="dept" style="margin-top:2px">${escapeHtml(p.department)}</div>` : ''}
+    <div class="progress-bar" style="margin-top:10px"><div style="width:${s.pct}%"></div></div>
+    <div class="meta-row" style="margin-top:4px">
+      <span>${s.done}/${s.total} iş tamamlandı</span>
+      ${s.overdue>0 ? `<span style="color:var(--red);font-weight:800">${s.overdue} gecikmiş</span>` : `<span>${s.pct}%</span>`}
+    </div>
     ${tabsHtml}
+    ${filterHtml}
     <div class="search-row" style="margin-top:0">
       <button class="fab" id="newTaskBtn">+</button>
       <button class="btn ghost" style="width:auto;flex:1" id="exportPdfBtn">PDF olarak indir</button>
@@ -676,7 +718,7 @@ function renderProject(pid, tab){
   document.querySelector('[data-back]').addEventListener('click', ()=>go({name:'home'}));
   document.getElementById('statusSelect').addEventListener('change', e=> setProjectStatus(pid, e.target.value));
   document.getElementById('newTaskBtn').addEventListener('click', ()=>openNewTaskSheet(pid));
-  document.getElementById('exportPdfBtn').addEventListener('click', ()=>exportProjectPdf(p, tasks));
+  document.getElementById('exportPdfBtn').addEventListener('click', ()=>exportProjectPdf(p, allTasks));
   document.getElementById('deleteProjectBtn').addEventListener('click', async ()=>{
     if(confirm('Bu projeyi ve tüm işlerini silmek istediğine emin misin?')){
       await deleteProject(pid);
@@ -691,6 +733,12 @@ function renderProject(pid, tab){
   });
   app.querySelectorAll('[data-kcard]').forEach(el=>{
     el.addEventListener('click', ()=> openColumnPicker(pid, el.dataset.kcard));
+  });
+  app.querySelectorAll('[data-scope]').forEach(el=>{
+    el.addEventListener('click', ()=>{ state.projectFilter.scope = el.dataset.scope; render(); });
+  });
+  app.querySelectorAll('[data-tagf]').forEach(el=>{
+    el.addEventListener('click', ()=>{ state.projectFilter.tag = el.dataset.tagf; render(); });
   });
 }
 
@@ -1022,6 +1070,7 @@ function renderProfile(){
     <div class="pill-toggle">
       <button data-theme="light" class="${(localStorage.getItem('pt_theme')||'light')==='light'?'active':''}">Açık</button>
       <button data-theme="dark" class="${(localStorage.getItem('pt_theme')||'light')==='dark'?'active':''}">Koyu</button>
+      <button data-theme="auto" class="${(localStorage.getItem('pt_theme')||'light')==='auto'?'active':''}">Otomatik</button>
     </div>
     <p class="hint" style="margin-top:8px">Bu cihaza özeldir, diğer kişileri etkilemez.</p>
   `;
@@ -1071,7 +1120,10 @@ function renderProfile(){
 
 /* ================= THEME ================= */
 function applyTheme(){
-  const t = localStorage.getItem('pt_theme') || 'light';
+  const stored = localStorage.getItem('pt_theme') || 'light';
+  const t = stored==='auto'
+    ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+    : stored;
   if(t==='dark'){
     document.documentElement.style.setProperty('--bg','#0F1C26');
     document.documentElement.style.setProperty('--panel','#16283A');
@@ -1132,6 +1184,44 @@ function exportProjectPdf(project, tasks){
   doc.save((project.title||'proje').replace(/[^\wşğüöçİıŞĞÜÖÇ ]/g,'').trim() + '.pdf');
 }
 
+/* ================= EXCEL EXPORT (tüm projeler) ================= */
+function exportAllProjectsExcel(){
+  if(!state.projects.length){ showToast('Rapor için önce proje ekle'); return; }
+  const projectRows = state.projects.map(p=>{
+    const s = projectStats(p.id);
+    return {
+      'Proje Adı': p.title || '',
+      'Departman': p.department || '',
+      'Durum': p.status==='devam' ? 'Devam' : p.status==='bitti' ? 'Bitti' : 'İptal',
+      'Toplam İş': s.total,
+      'Tamamlanan': s.done,
+      'Gecikmiş': s.overdue,
+      'İlerleme %': s.pct
+    };
+  });
+  const taskRows = [];
+  state.projects.forEach(p=>{
+    (state.tasksByProject[p.id] || []).forEach(t=>{
+      taskRows.push({
+        'Proje': p.title || '',
+        'İş Adı': t.name || '',
+        'İşi Veren': t.givenBy || '',
+        'İşi Yüklenen': t.assignedTo || '',
+        'Öncelik': t.priority==='acil' ? 'Acil' : t.priority==='dusuk' ? 'Düşük' : 'Normal',
+        'Durum': t.column==='bitti' ? 'Bitti' : t.column==='devam' ? 'Devam Ediyor' : 'Yapılacak',
+        'Son Tarih': t.deadline ? fmtDate(t.deadline) : '',
+        'Gecikti mi': isOverdue(t.deadline, t.column) ? 'Evet' : 'Hayır',
+        'Etiketler': (t.tags || []).join(', '),
+        'Açıklama': t.description || ''
+      });
+    });
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(projectRows), 'Projeler');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(taskRows.length ? taskRows : [{'Not':'Henüz iş yok'}]), 'İşler');
+  XLSX.writeFile(wb, 'tum-projeler-raporu.xlsx');
+}
+
 /* ================= MAIN RENDER DISPATCH ================= */
 function render(){
   applyTheme();
@@ -1152,6 +1242,12 @@ function render(){
 
 applyTheme();
 render();
+
+if(window.matchMedia){
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=>{
+    if((localStorage.getItem('pt_theme')||'light')==='auto') applyTheme();
+  });
+}
 
 if('serviceWorker' in navigator){
   window.addEventListener('load', ()=>{
